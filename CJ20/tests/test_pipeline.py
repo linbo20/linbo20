@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 from uwb_vitals.config import Config
 from uwb_vitals.io import load_recording
-from uwb_vitals.signals import extract
+from uwb_vitals.signals import extract, mdacm, block_filter
 from uwb_vitals.physiology import rates
 from uwb_vitals.pipeline import run
 
@@ -44,8 +44,37 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(ambiguous)
         self.assertTrue(all(not r['heart_valid'] and np.isnan(r['heart_rate_bpm']) for r in ambiguous))
         short,_ = extract(cir[:2000],cfg)
-        self.assertEqual(rates(short,cfg),[])
+        self.assertEqual([r['end_frame_exclusive'] for r in rates(short,cfg)], [501,1000,1500,2000])
+        self.assertTrue(all(r['warmup_window'] for r in rates(short,cfg)))
         self.assertEqual(len(short['respiration_rad']),2000)
+
+    def test_mdacm_and_second_channel_std(self):
+        cfg = Config()
+        t = np.arange(6000)/cfg.fs
+        truth = .4*np.sin(2*np.pi*.23*t)
+        np.testing.assert_allclose(mdacm(2000*np.exp(1j*truth)),truth,atol=1e-5)
+        cir = np.full((6000,8,32), 2000+0j, dtype=np.complex64)
+        cir[:,1,7] = 2000*np.exp(1j*truth)
+        cir[:,0,4] = 10000*np.exp(1j*2*truth)
+        data,selection = extract(cir,cfg)
+        self.assertEqual(selection['selected_rx'],1)
+        self.assertEqual(selection['selected_tap_offset'],7)
+        np.testing.assert_allclose(data['phase_rad'],truth,atol=1e-5)
+        rows = rates(data,cfg)
+        self.assertEqual([r['end_frame_exclusive'] for r in rows],
+                         [501,1000,1500,2000,2500,3000,3500,4000,4500,5000,5500,6000])
+        self.assertEqual(rows[6]['start_frame'],500)
+        self.assertEqual(rows[6]['estimate_s'],34.99)
+        self.assertFalse(rows[5]['warmup_window'])
+
+    def test_filter_blocks_preserve_state(self):
+        from scipy import signal
+        cfg = Config()
+        t = np.arange(2345)/cfg.fs
+        x = np.sin(2*np.pi*.23*t)
+        sos = signal.butter(4,cfg.respiration_band,fs=cfg.fs,btype='bandpass',output='sos')
+        expected,_ = signal.sosfilt(sos,x,zi=signal.sosfilt_zi(sos)*x[0])
+        np.testing.assert_allclose(block_filter(x,cfg.respiration_band,cfg),expected)
 
     def test_flat_is_invalid(self):
         data,_ = extract(np.zeros((4000,8,32),np.complex64),Config())

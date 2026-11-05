@@ -30,13 +30,14 @@ def run(folder, cfg=None):
     frame_fields = ['frame','time_s','timestamp',*data]
     write_csv(out/'frames.csv', (dict(frame=i,time_s=i/cfg.fs,timestamp=timestamp(i),
               **{k:v[i].item() for k,v in data.items()}) for i in range(len(cir))), frame_fields)
-    window_fields = ['start_frame','end_frame_exclusive','center_s','valid_fraction','motion_fraction',
+    window_fields = ['start_frame','end_frame_exclusive','center_s','estimate_s','window_duration_s','warmup_window','valid_fraction','motion_fraction',
                      'respiration_rate_bpm','respiration_spectral_fraction','respiration_valid',
                      'heart_rate_bpm','heart_spectral_fraction','heart_valid','heart_harmonic_ambiguous',
-                     'start_time','end_time_exclusive','center_time']
+                     'start_time','end_time_exclusive','center_time','estimate_time']
     for row in windows:
         row.update(start_time=timestamp(row['start_frame']),end_time_exclusive=timestamp(row['end_frame_exclusive']),
-                   center_time=timestamp(row['center_s']*cfg.fs))
+                   center_time=timestamp(row['center_s']*cfg.fs),
+                   estimate_time=timestamp(row['end_frame_exclusive']-1))
     write_csv(out/'rates_30s.csv',windows,window_fields)
     for row in beats:
         row['timestamp'] = timestamp(row['frame'])
@@ -68,6 +69,6 @@ def plot(out,data,windows,cfg):
     axes[1].plot(t,data['respiration_rad']); axes[1].set_ylabel('Respiration (rad)')
     axes[2].plot(t,data['heartbeat_rad']); axes[2].set_ylabel('Cardiac proxy (rad)')
     for key,label in [('respiration_rate_bpm','Respiration'),('heart_rate_bpm','Heart')]:
-        axes[3].plot([r['center_s'] for r in windows],[r[key] for r in windows],label=label)
+        axes[3].plot([r['estimate_s'] for r in windows],[r[key] for r in windows],label=label)
     axes[3].legend(); axes[3].set_ylabel('Rate (/min)'); axes[3].set_xlabel('Time (s)')
     fig.tight_layout(); fig.savefig(out/'overview.png',dpi=150); plt.close(fig)
