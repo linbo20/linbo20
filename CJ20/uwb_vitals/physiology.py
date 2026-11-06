@@ -1,6 +1,6 @@
 import numpy as np
 from scipy import signal
-from .signals import runs
+from .signals import runs, bandpass
 
 
 def spectral_rate(x, band, fs, minimum):
@@ -25,18 +25,27 @@ def rates(data, cfg):
     n = len(data['motion_score'])
     w, step = round(cfg.window_s*cfg.fs), round(cfg.step_s*cfg.fs)
     output = []
-    starts = list(range(0, max(0,n-w+1), step))
-    if n >= w and (not starts or starts[-1] != n-w):
-        starts.append(n-w)
-    for a in starts:
-        b = a+w
+    minimum = round(cfg.minimum_s*cfg.fs)
+    # First estimate strictly after 5 s, then 10,15,...; include final partial update.
+    ends = ([minimum+1] if n > minimum else [])
+    ends += list(range(2*step, n+1, step))
+    if n > minimum and n not in ends:
+        ends.append(n)
+    for b in sorted(set(ends)):
+        a = max(0, b-w)
         row = dict(start_frame=a, end_frame_exclusive=b, center_s=(a+b-1)/(2*cfg.fs),
+                   estimate_s=(b-1)/cfg.fs, window_duration_s=(b-a)/cfg.fs,
+                   warmup_window=bool(b-a < w),
                    valid_fraction=float(data['waveform_valid'][a:b].mean()),
                    motion_fraction=float(data['motion_flag'][a:b].mean()))
-        # Strict full clean window: no concatenation of separated clean fragments.
+        # No concatenation of separated clean phase fragments.
         for name, key, band in [('respiration','respiration_rad',cfg.respiration_band),
                                  ('heart','heartbeat_rad',cfg.heart_band)]:
-            rate, quality = spectral_rate(data[key][a:b], band, cfg.fs, cfg.min_spectral_fraction)
+            # Estimate from the local MDACM phase, avoiding the causal waveform's
+            # initialization transient and any samples beyond this window.
+            phase = data['phase_rad'][a:b]
+            x = bandpass(signal.detrend(phase), band, cfg.fs) if np.all(np.isfinite(phase)) else phase
+            rate, quality = spectral_rate(x, band, cfg.fs, cfg.min_spectral_fraction)
             row[name+'_rate_bpm'] = rate
             row[name+'_spectral_fraction'] = quality
             row[name+'_valid'] = bool(np.isfinite(rate))
